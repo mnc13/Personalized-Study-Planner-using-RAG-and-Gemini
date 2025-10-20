@@ -405,7 +405,56 @@ def generate_study_tasks(
 # --- Enrichment with fallback for JSON errors ---
 def fetch_topic_enrichment(course: str, topics: List[str]) -> Dict[str, Dict[str, Any]]:
     import json as _json
-    if _client is None:
+    # Use Gemini instead of Groq
+    try:
+        import google.generativeai as genai
+        from app.services.generate_plan import API_KEY
+        if not API_KEY:
+            raise ValueError("GEMINI_API_KEY not found")
+        genai.configure(api_key=API_KEY)
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+        user_prompt = (
+            "You are an expert MBBS content curator. Topics: " + ", ".join(topics) +
+            "\nReturn strict JSON mapping each topic to {subtopics: [..], resources: [..]}. "
+            "4-8 subtopics and 3-6 resources each. No commentary."
+        )
+
+        response = model.generate_content(user_prompt)
+        text = response.text.strip()
+        if not text:
+            raise ValueError("Empty response from Gemini")
+
+        json_start = text.index('{')
+        json_end = text.rindex('}') + 1
+        json_str = text[json_start:json_end]
+        parsed = _json.loads(json_str)
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for t in topics:
+            node = parsed.get(t)
+            if not isinstance(node, dict):
+                subs = [f"{t}: core concepts", f"{t}: MCQ pitfalls"]
+                res = [{"title": f"{t} fallback", "url": f"https://pubmed.ncbi.nlm.nih.gov/?term={t.replace(' ', '%20')}", "kind": "article"}]
+                out[t] = {"subtopics": subs, "resources": res}
+            else:
+                subs = [str(s) for s in node.get("subtopics", [])][:8]
+                clean_res: List[Dict[str, str]] = []
+                for r in (node.get("resources") or [])[:6]:
+                    try:
+                        clean_res.append({
+                            "title": str(r.get("title", ""))[:200],
+                            "url": str(r.get("url", "")),
+                            "kind": str(r.get("kind", "site")).lower(),
+                        })
+                    except Exception:
+                        continue
+                out[t] = {"subtopics": subs, "resources": clean_res}
+            out[t]["pubmed"] = _build_pubmed_queries(t, out[t]["subtopics"])
+        return out
+
+    except Exception as e:
+        log.warning("[LLM] Gemini enrichment failed: %s, using fallback for %s", e, topics)
         # fallback deterministic
         out: Dict[str, Dict[str, Any]] = {}
         for t in topics:
@@ -417,44 +466,6 @@ def fetch_topic_enrichment(course: str, topics: List[str]) -> Dict[str, Dict[str
             out[t] = {"subtopics": subs, "resources": res}
             out[t]["pubmed"] = _build_pubmed_queries(t, subs)
         return out
-
-    user = {
-        "role": "user",
-        "content": (
-            "You are an expert MBBS content curator. Topics: " + ", ".join(topics) +
-            "\nReturn strict JSON mapping each topic to {subtopics: [..], resources: [..]}. "
-            "4-8 subtopics and 3-6 resources each. No commentary."
-        )
-    }
-    messages = [{"role": "system", "content": SYSTEM_ENRICH_PROMPT}, user]
-
-    parsed = _chat_json(messages)
-    if parsed is None:
-        log.warning("[LLM] enrichment JSON failed, using fallback for %s", topics)
-        return fetch_topic_enrichment(course, topics)  # recursion but will go fallback path if _client is None
-
-    out: Dict[str, Dict[str, Any]] = {}
-    for t in topics:
-        node = parsed.get(t)
-        if not isinstance(node, dict):
-            subs = [f"{t}: core concepts", f"{t}: MCQ pitfalls"]
-            res = [{"title": f"{t} fallback", "url": f"https://pubmed.ncbi.nlm.nih.gov/?term={t.replace(' ', '%20')}", "kind": "article"}]
-            out[t] = {"subtopics": subs, "resources": res}
-        else:
-            subs = [str(s) for s in node.get("subtopics", [])][:8]
-            clean_res: List[Dict[str, str]] = []
-            for r in (node.get("resources") or [])[:6]:
-                try:
-                    clean_res.append({
-                        "title": str(r.get("title", ""))[:200],
-                        "url": str(r.get("url", "")),
-                        "kind": str(r.get("kind", "site")).lower(),
-                    })
-                except Exception:
-                    continue
-            out[t] = {"subtopics": subs, "resources": clean_res}
-        out[t]["pubmed"] = _build_pubmed_queries(t, out[t]["subtopics"])
-    return out
 
 # --- Subtopic map endpoints ---
 def subtopic_map_user_prompt(topic: str, course: str) -> Dict[str, str]:
@@ -475,16 +486,39 @@ Produce STRICT JSON:
     }
 
 def fetch_subtopic_map(topic: str, course: str) -> Optional[Dict[str, Any]]:
-    data = _chat_json([{"role": "system", "content": SYSTEM_SUBTOPIC_MAP}, subtopic_map_user_prompt(topic, course)],
-                      max_tokens=1400)
-    if not isinstance(data, dict):
-        log.warning("[LLM] subtopic_map JSON invalid for %s", topic)
+    # Use Gemini instead of Groq
+    try:
+        import google.generativeai as genai
+        from app.services.generate_plan import API_KEY
+        if not API_KEY:
+            raise ValueError("GEMINI_API_KEY not found")
+        genai.configure(api_key=API_KEY)
+        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+
+        prompt = subtopic_map_user_prompt(topic, course)["content"]
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if not text:
+            raise ValueError("Empty response from Gemini")
+
+        import json as _json
+        json_start = text.index('{')
+        json_end = text.rindex('}') + 1
+        json_str = text[json_start:json_end]
+        data = _json.loads(json_str)
+
+        if not isinstance(data, dict):
+            log.warning("[LLM] subtopic_map JSON invalid for %s", topic)
+            return None
+        data["topic"] = str(data.get("topic", topic))[:200]
+        data["subtopics"] = data.get("subtopics", [])
+        data["study_path"] = data.get("study_path", [])
+        data["resource_hints"] = data.get("resource_hints", [])
+        return data
+
+    except Exception as e:
+        log.warning("[LLM] Gemini subtopic_map failed: %s, returning None for %s", e, topic)
         return None
-    data["topic"] = str(data.get("topic", topic))[:200]
-    data["subtopics"] = data.get("subtopics", [])
-    data["study_path"] = data.get("study_path", [])
-    data["resource_hints"] = data.get("resource_hints", [])
-    return data
 
 def fetch_subtopic_map_with_pubmed(topic: str, course: str) -> Optional[Dict[str, Any]]:
     m = fetch_subtopic_map(topic, course)

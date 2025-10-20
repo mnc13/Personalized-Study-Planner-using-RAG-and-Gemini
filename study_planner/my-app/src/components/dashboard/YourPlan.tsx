@@ -128,12 +128,18 @@ export function YourPlan() {
     }
     return [];
   }, [selectedTopic, selectedCourse, groupedTasks]);
+
+  // Collect unique pages for display
+  const uniquePages = useMemo(() => {
+    const pages = humanAnatomyCitations.map((c: any) => c?.page).filter(p => p != null && p > 0);
+    return [...new Set(pages)].sort((a, b) => a - b);
+  }, [humanAnatomyCitations]);
   // -------------------------------------------------------------------------------------
 
   return (
     <Card className="flex flex-col shadow-xl shadow-blue-200/60">
       <CardHeader className="flex-shrink-0 flex items-center justify-between">
-        <CardTitle className="text-base font-semibold">Your Plan</CardTitle>
+        <CardTitle className="text-base font-semibold text-left">Your Plan</CardTitle>
         <Button
           variant="outline"
           size="sm"
@@ -186,30 +192,24 @@ export function YourPlan() {
             <DialogTitle>{selectedTopic} - Detailed Plan</DialogTitle>
           </DialogHeader>
 
-          {/* ---- NEW: Human Anatomy (RAG) section; shows only for Anatomy and only if context exists ---- */}
-          {selectedCourse?.toLowerCase() === "anatomy" && humanAnatomyCitations.length > 0 && (
-            <div className="space-y-2 mb-6">
-              <h4 className="font-semibold">Human Anatomy</h4>
-              <ul className="space-y-2">
-                {humanAnatomyCitations.map((c: any, i: number) => (
-                  <li key={`${c?.chapter ?? "Unknown"}-${c?.page ?? i}`} className="text-sm">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="secondary" className="whitespace-nowrap">
-                        {c?.chapter || "Unknown Chapter"} — p.{c?.page ?? "?"}
-                      </Badge>
-                      <span className="text-muted-foreground">{c?.preview}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {/* --------------------------------------------------------------------------- */}
-
           {syllabusLoading ? (
             <div className="text-center text-muted-foreground">Loading...</div>
           ) : syllabusData ? (
             <div className="space-y-6">
+              {/* ---- NEW: Human Anatomy (RAG) section; shows only for Anatomy and only if context exists ---- */}
+              {selectedCourse?.toLowerCase() === "anatomy" && uniquePages.length > 0 && (
+                <Card className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
+                  <h4 className="font-semibold mb-2">Gray's Anatomy</h4>
+                  <Badge variant="secondary" className="mb-2">
+                    Pages: {uniquePages.join(", ")}
+                  </Badge>
+                  <p className="text-sm text-muted-foreground">
+                    For reference and better understanding, read from these pages of the book "Gray's Anatomy for Students" by Richard L. Drake, A. Wayne Vogl, and Adam W. M. Mitchell.
+                  </p>
+                </Card>
+              )}
+              {/* --------------------------------------------------------------------------- */}
+
               {/* Subtopics Section */}
               {syllabusData.subtopics && syllabusData.subtopics.length > 0 && (
                 <div>

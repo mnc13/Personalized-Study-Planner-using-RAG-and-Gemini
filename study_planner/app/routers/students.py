@@ -318,8 +318,17 @@ def debug_groq():
 @router.get("/courses/{course}/topics/{topic}/syllabus")
 def syllabus_proxy(course: str, topic: str):
     # Lightweight passthrough for a single-topic enrichment view
-    data = fetch_topic_enrichment(course, [topic])
-    return data.get(topic, {"subtopics": [], "resources": []})
+    data_enrich = fetch_topic_enrichment(course, [topic])
+    data_map = fetch_subtopic_map_with_pubmed(topic, course)
+    subtopics = []
+    if data_map:
+        for sec in data_map.get("subtopics", []):
+            subtopics.extend(sec.get("items", []))
+    else:
+        subtopics = data_enrich.get(topic, {}).get("subtopics", [])
+    resources = data_enrich.get(topic, {}).get("resources", [])
+    pubmed = data_map.get("pubmed", {}) if data_map else data_enrich.get(topic, {}).get("pubmed", {})
+    return {"subtopics": subtopics, "resources": resources, "pubmed": pubmed}
 
 
 # ---------------------------------------------------------------------------
